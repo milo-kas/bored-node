@@ -1,6 +1,7 @@
 use super::protocol::{ClipboardRequest, ClipboardResponse, NetworkCommand, NetworkEvent};
 use futures::StreamExt;
 use libp2p::{
+    multiaddr::Protocol,
     PeerId, StreamProtocol, identity, mdns, ping,
     request_response::{self, ProtocolSupport},
     swarm::{NetworkBehaviour, SwarmEvent},
@@ -9,6 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     str::FromStr,
+    time::Duration,
 };
 use tokio::sync::mpsc;
 
@@ -51,6 +53,7 @@ pub async fn run_network_loop(
             let ping = ping::Behaviour::default();
             Ok(BoredBehaviour { req_res, mdns, ping })
         })?
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(3600)))
         .build();
 
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
@@ -70,33 +73,39 @@ pub async fn run_network_loop(
                 NetworkCommand::BroadcastText(text) => {
                     let req = ClipboardRequest { text: text.clone() };
 
-                    if connected_peers.is_empty() {
+                    if discovered_peers.is_empty() {
                         emit_event(
                             &event_tx,
                             NetworkEvent::NetworkError {
                                 peer: "broadcast".to_string(),
-                                error: "no peers currently connected".to_string(),
+                                error: "no peers discovered on the LAN".to_string(),
                             },
                         );
                     } else {
                         emit_event(&event_tx, NetworkEvent::MessageSent { text: text.clone() });
-                        for peer in &connected_peers {
+                        for peer in discovered_peers.keys() {
+                            if !connected_peers.contains(peer) {
+                                let _ = swarm.dial(*peer);
+                            }
                             swarm.behaviour_mut().req_res.send_request(peer, req.clone());
                         }
                     }
                 }
                 NetworkCommand::SendTextTo { target_peer_id, text } => {
                     if let Ok(peer) = PeerId::from_str(&target_peer_id) {
-                        if connected_peers.contains(&peer) {
+                        if discovered_peers.contains_key(&peer) {
                             let req = ClipboardRequest { text: text.clone() };
-                            emit_event(&event_tx, NetworkEvent::MessageSent { text: text.clone() });
+                            emit_event(&event_tx, NetworkEvent::MessageSent { text });
+                            if !connected_peers.contains(&peer) {
+                                let _ = swarm.dial(peer);
+                            }
                             swarm.behaviour_mut().req_res.send_request(&peer, req);
                         } else {
                             emit_event(
                                 &event_tx,
                                 NetworkEvent::NetworkError {
                                     peer: target_peer_id,
-                                    error: "peer not connected".to_string(),
+                                    error: "peer not discovered on network".to_string(),
                                 },
                             );
                         }
@@ -121,13 +130,17 @@ pub async fn run_network_loop(
                     }
                 }
 
-                SwarmEvent::ExpiredListenAddr { address, .. } => {
-                    let addr_str = address.to_string();
-                    listen_addresses.remove(&addr_str);
+                SwarmEvent::ExpiredListenAddr { .. } => {
+                    // Leave this empty to prevent UI spam when interfaces flap
                 }
 
                 SwarmEvent::Behaviour(BoredBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, addr) in list {
+                        let is_loopback = addr.iter().any(|p| matches!(p, Protocol::Ip4(ip) if ip.is_loopback()));
+                        if is_loopback {
+                            continue;
+                        }
+
                         swarm.add_peer_address(peer_id, addr.clone());
 
                         let addresses = discovered_peers.entry(peer_id).or_default();
