@@ -58,7 +58,7 @@ pub async fn run_network_loop(
                 ping,
             })
         })?
-        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(3600)))
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(86400)))
         .build();
 
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
@@ -87,11 +87,12 @@ pub async fn run_network_loop(
                             },
                         );
                     } else {
+                        // Move the MessageSent emission HERE so the UI is updated immediately
                         emit_event(&event_tx, NetworkEvent::MessageSent { text: text.clone() });
+
                         for peer in discovered_peers.keys() {
-                            if !connected_peers.contains(peer) {
-                                let _ = swarm.dial(*peer);
-                            }
+                            // If they aren't connected, libp2p will dial them and buffer
+                            // the req until the connection succeeds or fails.
                             swarm.behaviour_mut().req_res.send_request(peer, req.clone());
                         }
                     }
@@ -101,9 +102,6 @@ pub async fn run_network_loop(
                         if discovered_peers.contains_key(&peer) {
                             let req = ClipboardRequest { text: text.clone() };
                             emit_event(&event_tx, NetworkEvent::MessageSent { text });
-                            if !connected_peers.contains(&peer) {
-                                let _ = swarm.dial(peer);
-                            }
                             swarm.behaviour_mut().req_res.send_request(&peer, req);
                         } else {
                             emit_event(
@@ -142,20 +140,20 @@ pub async fn run_network_loop(
                 SwarmEvent::Behaviour(BoredBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, addr) in list {
                         let is_loopback = addr.iter().any(|p| matches!(p, Protocol::Ip4(ip) if ip.is_loopback()));
-                        if is_loopback {
-                            continue;
-                        }
+                        if is_loopback { continue; }
 
                         swarm.add_peer_address(peer_id, addr.clone());
-
                         let addresses = discovered_peers.entry(peer_id).or_default();
+
                         if addresses.is_empty() {
                             emit_event(&event_tx, NetworkEvent::PeerDiscovered(peer_id.to_string()));
-                            if !connected_peers.contains(&peer_id) {
-                                let _ = swarm.dial(peer_id);
-                            }
                         }
                         addresses.insert(addr);
+
+                        // Retry the dial on every mDNS pulse if the connection was dropped or blocked
+                        if !connected_peers.contains(&peer_id) {
+                            let _ = swarm.dial(peer_id);
+                        }
                     }
                 }
 
@@ -211,8 +209,8 @@ pub async fn run_network_loop(
                     peer,
                     ..
                 })) => {
-                    // Safety net for when an mDNS ghost record causes a dial attempt to a dead peer - purge them
-                    discovered_peers.remove(&peer);
+                    // No pruning from discovered_peers here!
+                    // Issue mild warning that the buffered message failed to deliver.
                     emit_event(&event_tx, NetworkEvent::PeerUnreachable(peer.to_string()));
                 }
 
