@@ -50,6 +50,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 NetworkEvent::PeerExpired(peer) => println!("[DISCOVERY] Lost peer: {peer}"),
                 NetworkEvent::PeerConnected(peer) => println!("[CONNECTION] Connected to {peer}"),
                 NetworkEvent::PeerDisconnected(peer) => println!("[CONNECTION] Disconnected from {peer}"),
+                NetworkEvent::PeerUnreachable(peer) => println!("[INFO] Peer {peer} is unreachable. Pruned from routing table."),
                 NetworkEvent::MessageSent { text } => {
                     println!("\n--- CLIPBOARD SENT ---");
                     println!("{text}");

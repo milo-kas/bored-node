@@ -1,8 +1,9 @@
 use super::protocol::{ClipboardRequest, ClipboardResponse, NetworkCommand, NetworkEvent};
 use futures::StreamExt;
 use libp2p::{
+    PeerId, StreamProtocol, identity, mdns,
     multiaddr::Protocol,
-    PeerId, StreamProtocol, identity, mdns, ping,
+    ping,
     request_response::{self, ProtocolSupport},
     swarm::{NetworkBehaviour, SwarmEvent},
 };
@@ -51,7 +52,11 @@ pub async fn run_network_loop(
             let mdns =
                 mdns::tokio::Behaviour::new(mdns::Config::default(), key.public().to_peer_id())?;
             let ping = ping::Behaviour::default();
-            Ok(BoredBehaviour { req_res, mdns, ping })
+            Ok(BoredBehaviour {
+                req_res,
+                mdns,
+                ping,
+            })
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(3600)))
         .build();
@@ -174,6 +179,8 @@ pub async fn run_network_loop(
 
                 SwarmEvent::ConnectionClosed { peer_id, .. } => {
                     if connected_peers.remove(&peer_id) {
+                        // Instantly purge the peer from the mDNS routing cache on disconnect
+                        discovered_peers.remove(&peer_id);
                         emit_event(&event_tx, NetworkEvent::PeerDisconnected(peer_id.to_string()));
                     }
                 }
@@ -202,16 +209,11 @@ pub async fn run_network_loop(
 
                 SwarmEvent::Behaviour(BoredBehaviourEvent::ReqRes(request_response::Event::OutboundFailure {
                     peer,
-                    error,
                     ..
                 })) => {
-                    emit_event(
-                        &event_tx,
-                        NetworkEvent::NetworkError {
-                            peer: peer.to_string(),
-                            error: error.to_string(),
-                        },
-                    );
+                    // Safety net for when an mDNS ghost record causes a dial attempt to a dead peer - purge them
+                    discovered_peers.remove(&peer);
+                    emit_event(&event_tx, NetworkEvent::PeerUnreachable(peer.to_string()));
                 }
 
                 SwarmEvent::Behaviour(BoredBehaviourEvent::ReqRes(request_response::Event::InboundFailure {
@@ -223,7 +225,7 @@ pub async fn run_network_loop(
                         &event_tx,
                         NetworkEvent::NetworkError {
                             peer: peer.to_string(),
-                            error: error.to_string(),
+                            error: format!("Inbound error: {error}"),
                         },
                     );
                 }

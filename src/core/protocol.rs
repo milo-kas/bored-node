@@ -19,6 +19,7 @@ pub enum NetworkEvent {
     PeerExpired(String),
     PeerConnected(String),
     PeerDisconnected(String),
+    PeerUnreachable(String),
     MessageSent { text: String },
     MessageReceived { from: String, text: String },
     NetworkError { peer: String, error: String },
