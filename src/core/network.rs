@@ -118,15 +118,24 @@ pub async fn run_network_loop(
                     }
                 }
                 NetworkCommand::DismissCurrent => {
-                    if let Some(item) = queue.next() {
-                        emit_event(&event_tx, NetworkEvent::QueueItemDismissed { item });
+                    if let Some(dismissed) = queue.next() {
+                        let next = queue.peek_current().cloned();
+                        emit_event(&event_tx, NetworkEvent::QueueItemDismissed {
+                                dismissed,
+                                next
+                            });
                     } else {
                         emit_event(&event_tx, NetworkEvent::QueueEmpty);
                     }
                 }
+                // Star current item and dismiss it from the queue.
                 NetworkCommand::StarCurrent => {
-                    if let Some(item) = queue.star_current() {
-                        emit_event(&event_tx, NetworkEvent::QueueItemStarred { item });
+                    if let Some(starred) = queue.star_current() {
+                        let next = queue.peek_current().cloned();
+                        emit_event(&event_tx, NetworkEvent::QueueItemStarred {
+                                starred,
+                                next
+                            });
                     } else {
                         emit_event(&event_tx, NetworkEvent::QueueEmpty);
                     }

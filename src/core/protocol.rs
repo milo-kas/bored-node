@@ -41,10 +41,12 @@ pub enum NetworkEvent {
         reason: String,
     },
     QueueItemDismissed {
-        item: ClipboardItem,
+        dismissed: ClipboardItem,
+        next: Option<ClipboardItem>,
     },
     QueueItemStarred {
-        item: ClipboardItem,
+        starred: ClipboardItem, // a.k.a dismissed but starred
+        next: Option<ClipboardItem>,
     },
     QueuePendingList {
         items: Vec<ClipboardItem>,

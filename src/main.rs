@@ -111,12 +111,21 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 NetworkEvent::QueueRejected { reason } => {
                     println!("[ERROR] Incoming item rejected: {reason}");
                 }
-                NetworkEvent::QueueItemDismissed { item } => {
-                    print_received_block(item.from.as_deref(), &item.text);
+                NetworkEvent::QueueItemDismissed { dismissed, next } => {
+                    println!("[INFO] Dismissed: {}", preview_text(&dismissed.text, 40));
+                    if let Some(next_item) = next {
+                        print_received_block(next_item.from.as_deref(), &next_item.text);
+                    } else {
+                        println!("Queue is now empty.")
+                    }
                 }
-                NetworkEvent::QueueItemStarred { item } => {
-                    println!("[INFO] Item saved to starred list.");
-                    print_received_block(item.from.as_deref(), &item.text);
+                NetworkEvent::QueueItemStarred { starred, next } => {
+                    println!("[INFO] Starred: {}", preview_text(&starred.text, 40));
+                    if let Some(next_item) = next {
+                        print_received_block(next_item.from.as_deref(), &next_item.text);
+                    } else {
+                        println!("Queue is now empty.")
+                    }
                 }
                 NetworkEvent::QueuePendingList { items } => {
                     if items.is_empty() {
