@@ -1,4 +1,4 @@
-[# bored-node
+# bored-node
 > A device that has nothing better to do than to become a clipboard
 
 ## What it actually does
