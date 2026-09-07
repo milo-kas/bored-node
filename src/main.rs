@@ -28,7 +28,7 @@ fn format_queue_status(queue_len: usize, queue_bytes: usize) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut node = Node::start().await?;
+    let mut node = Node::start(None).await?;
     let mut stdin = io::BufReader::new(io::stdin()).lines();
 
     println!("bored-node CLI running.");
@@ -145,22 +145,27 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         }
                     }
                 }
-                NetworkEvent::QueueStarredList { items } => {
+                NetworkEvent::StarredPageLoaded { items, .. } => {
                     if items.is_empty() {
                         println!("No starred items.");
                     } else {
                         for item in items {
                             println!("--- STARRED ITEM [{}] ---", item.id);
-                            println!("{}", item.text);
+                            println!("{}", item.preview);
                             println!("--------------------");
                         }
                     }
                 }
-                NetworkEvent::QueueItemUnstarred { item } => {
-                    println!("[INFO] Unstarred [{}]: {}", item.id, preview_text(&item.text, 40));
+                NetworkEvent::QueueItemUnstarred { id } => {
+                    println!("[INFO] Unstarred [{id}]");
                 }
-                NetworkEvent::QueueUnstarFailed { id } => {
-                    println!("[ERROR] No starred item found with id {id}.");
+                NetworkEvent::StarredTextLoaded { id, text } => {
+                    println!("--- STARRED ITEM [{id}] ---");
+                    println!("{text}");
+                    println!("--------------------");
+                }
+                NetworkEvent::DatabaseError(error) => {
+                    println!("[ERROR] Database: {error}");
                 }
                 NetworkEvent::QueueEmpty => println!("Queue is empty."),
                 NetworkEvent::List { listen_addresses, discovered_peers, connected_peers } => {

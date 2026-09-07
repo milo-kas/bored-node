@@ -54,7 +54,6 @@ impl std::error::Error for QueueError {}
 #[derive(Debug, Default, Clone)]
 pub struct ClipboardQueue {
     pub pending: VecDeque<ClipboardItem>,
-    pub starred: Vec<ClipboardItem>,
     pub current_bytes: usize,
 }
 
@@ -100,7 +99,6 @@ impl ClipboardQueue {
         let item = self.pending.pop_front();
         if let Some(ref current) = item {
             self.current_bytes = self.current_bytes.saturating_sub(current.size_bytes);
-            self.starred.push(current.clone());
         }
         item
     }
@@ -109,14 +107,6 @@ impl ClipboardQueue {
         self.pending.iter()
     }
 
-    pub fn list_starred(&self) -> impl Iterator<Item = &ClipboardItem> {
-        self.starred.iter()
-    }
-
-    pub fn unstar(&mut self, id: u128) -> Option<ClipboardItem> {
-        let index = self.starred.iter().position(|item| item.id == id)?;
-        Some(self.starred.remove(index))
-    }
 }
 
 #[cfg(test)]
@@ -176,7 +166,6 @@ mod tests {
         let starred_item = queue.star_current().unwrap();
 
         assert!(queue.pending.is_empty());
-        assert_eq!(queue.starred.len(), 1);
         assert_eq!(starred_item.text, text);
         assert_eq!(queue.current_bytes, 0);
     }

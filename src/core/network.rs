@@ -1,4 +1,5 @@
 use super::{
+    db,
     protocol::{ClipboardRequest, ClipboardResponse, NetworkCommand, NetworkEvent},
     queue::{ClipboardQueue, QueueError},
 };
@@ -13,6 +14,7 @@ use libp2p::{
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
+    path::PathBuf,
     str::FromStr,
     time::Duration,
 };
@@ -32,7 +34,9 @@ fn emit_event(event_tx: &mpsc::Sender<NetworkEvent>, event: NetworkEvent) {
 pub async fn run_network_loop(
     mut command_rx: mpsc::Receiver<NetworkCommand>,
     event_tx: mpsc::Sender<NetworkEvent>,
+    db_path: PathBuf,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let db = db::Database::init(&db_path).expect("Failed to init DB");
     let local_key = identity::Keypair::generate_ed25519();
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
@@ -131,11 +135,16 @@ pub async fn run_network_loop(
                 // Star current item and dismiss it from the queue.
                 NetworkCommand::StarCurrent => {
                     if let Some(starred) = queue.star_current() {
-                        let next = queue.peek_current().cloned();
-                        emit_event(&event_tx, NetworkEvent::QueueItemStarred {
-                                starred,
-                                next
-                            });
+                        match db.insert(&starred) {
+                            Ok(()) => {
+                                let next = queue.peek_current().cloned();
+                                emit_event(&event_tx, NetworkEvent::QueueItemStarred {
+                                    starred,
+                                    next,
+                                });
+                            }
+                            Err(err) => emit_event(&event_tx, NetworkEvent::DatabaseError(err)),
+                        }
                     } else {
                         emit_event(&event_tx, NetworkEvent::QueueEmpty);
                     }
@@ -144,15 +153,22 @@ pub async fn run_network_loop(
                     let items = queue.list_all().cloned().collect();
                     emit_event(&event_tx, NetworkEvent::QueuePendingList { items });
                 }
-                NetworkCommand::ListStarred => {
-                    let items = queue.list_starred().cloned().collect();
-                    emit_event(&event_tx, NetworkEvent::QueueStarredList { items });
+                NetworkCommand::Unstar(id) => {
+                    match db.delete(id) {
+                        Ok(()) => emit_event(&event_tx, NetworkEvent::QueueItemUnstarred { id }),
+                        Err(err) => emit_event(&event_tx, NetworkEvent::DatabaseError(err.to_string())),
+                    }
                 }
-                NetworkCommand::Unstar { id } => {
-                    if let Some(item) = queue.unstar(id) {
-                        emit_event(&event_tx, NetworkEvent::QueueItemUnstarred { item });
-                    } else {
-                        emit_event(&event_tx, NetworkEvent::QueueUnstarFailed { id });
+                NetworkCommand::LoadStarredPage { limit, offset } => {
+                    match db.get_preview_page(limit, offset) {
+                        Ok(items) => emit_event(&event_tx, NetworkEvent::StarredPageLoaded { items, offset }),
+                        Err(err) => emit_event(&event_tx, NetworkEvent::DatabaseError(err.to_string())),
+                    }
+                }
+                NetworkCommand::GetFullStarredText(id) => {
+                    match db.get_full_text(id) {
+                        Ok(text) => emit_event(&event_tx, NetworkEvent::StarredTextLoaded { id, text }),
+                        Err(err) => emit_event(&event_tx, NetworkEvent::DatabaseError(err.to_string())),
                     }
                 }
                 NetworkCommand::List => {

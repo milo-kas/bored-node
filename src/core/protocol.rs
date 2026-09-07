@@ -2,6 +2,14 @@ use crate::core::queue::ClipboardItem;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone)]
+pub struct StarredMetadata {
+    pub id: u128,
+    pub preview: String,
+    pub size_bytes: usize,
+    pub from: Option<String>,
+}
+
 // Wire formats for libp2p Request/Response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardRequest {
@@ -51,15 +59,15 @@ pub enum NetworkEvent {
     QueuePendingList {
         items: Vec<ClipboardItem>,
     },
-    QueueStarredList {
-        items: Vec<ClipboardItem>,
-    },
     QueueItemUnstarred {
-        item: ClipboardItem,
-    },
-    QueueUnstarFailed {
         id: u128,
     },
+    StarredPageLoaded {
+        items: Vec<StarredMetadata>,
+        offset: usize,
+    },
+    StarredTextLoaded { id: u128, text: String },
+    DatabaseError(String),
     QueueEmpty,
     NetworkError {
         peer: String,
@@ -83,9 +91,8 @@ pub enum NetworkCommand {
     DismissCurrent,
     StarCurrent,
     ListPending,
-    ListStarred,
-    Unstar {
-        id: u128,
-    },
+    Unstar(u128),
+    LoadStarredPage { limit: usize, offset: usize },
+    GetFullStarredText(u128),
     List,
 }
