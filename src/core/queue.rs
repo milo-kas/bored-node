@@ -113,3 +113,79 @@ impl ClipboardQueue {
         self.starred.iter()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_push_respects_count_limit() {
+        let mut queue = ClipboardQueue::default();
+
+        for i in 0..MAX_QUEUE_ITEMS {
+            queue.push(format!("item-{i}")).unwrap();
+        }
+
+        assert_eq!(queue.pending.len(), MAX_QUEUE_ITEMS);
+        assert_eq!(queue.push("overflow".to_string()), Err(QueueError::QueueFull));
+        assert_eq!(queue.pending.len(), MAX_QUEUE_ITEMS);
+    }
+
+    #[test]
+    fn test_push_respects_memory_limit() {
+        let mut queue = ClipboardQueue::default();
+        let chunk_size = 200_000_000; // 200MB chunks
+        let chunk = "A".repeat(chunk_size);
+
+        // Push 2 chunks (count = 2, total bytes = 400,000,000)
+        queue.push(chunk.clone()).unwrap();
+        queue.push(chunk.clone()).unwrap();
+
+        assert_eq!(queue.current_bytes, MAX_QUEUE_BYTES);
+        assert_eq!(queue.pending.len(), 2);
+
+        let before = queue.current_bytes;
+        // Error should be returned because the queue is full in terms of bytes
+        assert_eq!(queue.push("A".repeat(1)), Err(QueueError::QueueFull));
+        assert_eq!(queue.current_bytes, before);
+    }
+
+    #[test]
+    fn test_triage_frees_space() {
+        let mut queue = ClipboardQueue::default();
+        for i in 0..MAX_QUEUE_ITEMS {
+            queue.push(format!("item-{i}")).unwrap();
+        }
+
+        let _ = queue.next();
+        assert_eq!(queue.pending.len(), MAX_QUEUE_ITEMS - 1);
+        assert!(queue.push("replacement".to_string()).is_ok());
+    }
+
+    #[test]
+    fn test_star_current_moves_item() {
+        let mut queue = ClipboardQueue::default();
+        let text = "important".to_string();
+
+        queue.push(text.clone()).unwrap();
+        let starred_item = queue.star_current().unwrap();
+
+        assert!(queue.pending.is_empty());
+        assert_eq!(queue.starred.len(), 1);
+        assert_eq!(starred_item.text, text);
+        assert_eq!(queue.current_bytes, 0);
+    }
+
+    #[test]
+    fn test_next_reduces_bytes() {
+        let mut queue = ClipboardQueue::default();
+        let payload = "A".repeat(1_000_000);
+
+        queue.push(payload).unwrap();
+        assert_eq!(queue.current_bytes, 1_000_000);
+
+        let _ = queue.next();
+        assert!(queue.pending.is_empty());
+        assert_eq!(queue.current_bytes, 0);
+    }
+}
