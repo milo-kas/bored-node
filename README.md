@@ -1,4 +1,4 @@
-# bored-node
+[# bored-node
 > A device that has nothing better to do than to become a clipboard
 
 ## What it actually does
@@ -18,3 +18,8 @@ P2P; No server; No cloud; No accounts. **_Simply your WiFi network._**
 ## Security Note
 - Current design assumes a trusted home network (no DoS protection for public WiFi). 
 Moreover, anyone on the same network can send unsolicited content.
+
+## More to come
+Live Clipboard Sync:
+- Opt-in OS Clipboard with background sync
+- Mutual Consent Handshake
