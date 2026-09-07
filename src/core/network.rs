@@ -1,4 +1,7 @@
-use super::protocol::{ClipboardRequest, ClipboardResponse, NetworkCommand, NetworkEvent};
+use super::{
+    protocol::{ClipboardRequest, ClipboardResponse, NetworkCommand, NetworkEvent},
+    queue::{ClipboardQueue, QueueError},
+};
 use futures::StreamExt;
 use libp2p::{
     PeerId, StreamProtocol, identity, mdns,
@@ -32,7 +35,6 @@ pub async fn run_network_loop(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let local_key = identity::Keypair::generate_ed25519();
 
-    // Build the libp2p swarm for LAN discovery and clipboard request/response messages.
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
         .with_tokio()
         .with_tcp(
@@ -63,17 +65,13 @@ pub async fn run_network_loop(
 
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-    // Track peers discovered on the LAN by active multiaddr set, so a peer is not dropped
-    // until every discovered route has actually expired.
     let mut discovered_peers: HashMap<PeerId, HashSet<libp2p::Multiaddr>> = HashMap::new();
-    // Track actual TCP connections so the UI reflects real online/offline state.
     let mut connected_peers: HashSet<PeerId> = HashSet::new();
-    // Track listen addresses to avoid duplicate "ListeningOn" events.
     let mut listen_addresses: HashSet<String> = HashSet::new();
+    let mut queue = ClipboardQueue::default();
 
     loop {
         tokio::select! {
-            // Handle outbound commands coming from the app or CLI.
             Some(cmd) = command_rx.recv() => match cmd {
                 NetworkCommand::BroadcastText(text) => {
                     let req = ClipboardRequest { text: text.clone() };
@@ -87,12 +85,9 @@ pub async fn run_network_loop(
                             },
                         );
                     } else {
-                        // Move the MessageSent emission HERE so the UI is updated immediately
                         emit_event(&event_tx, NetworkEvent::MessageSent { text: text.clone() });
 
                         for peer in discovered_peers.keys() {
-                            // If they aren't connected, libp2p will dial them and buffer
-                            // the req until the connection succeeds or fails.
                             swarm.behaviour_mut().req_res.send_request(peer, req.clone());
                         }
                     }
@@ -122,15 +117,40 @@ pub async fn run_network_loop(
                         );
                     }
                 }
+                NetworkCommand::DismissCurrent => {
+                    if let Some(item) = queue.next() {
+                        emit_event(&event_tx, NetworkEvent::QueueItemDismissed { item });
+                    } else {
+                        emit_event(&event_tx, NetworkEvent::QueueEmpty);
+                    }
+                }
+                NetworkCommand::StarCurrent => {
+                    if let Some(item) = queue.star_current() {
+                        emit_event(&event_tx, NetworkEvent::QueueItemStarred { item });
+                    } else {
+                        emit_event(&event_tx, NetworkEvent::QueueEmpty);
+                    }
+                }
+                NetworkCommand::ListPending => {
+                    let items = queue.list_all().cloned().collect();
+                    emit_event(&event_tx, NetworkEvent::QueuePendingList { items });
+                }
+                NetworkCommand::ListStarred => {
+                    let items = queue.list_starred().cloned().collect();
+                    emit_event(&event_tx, NetworkEvent::QueueStarredList { items });
+                }
                 NetworkCommand::List => {
-                    // Emit a snapshot of the current network state
                     let listen_addresses_list = listen_addresses.iter().cloned().collect();
                     let connected_peers_list = connected_peers.iter().map(|p| p.to_string()).collect();
-
-                    // Hashmap (peerID and associated addresses)
-                    let discovered_peers_map = discovered_peers.iter().map(|(peer_id, addrs)| {
-                        (peer_id.to_string(), addrs.iter().map(|addr| addr.to_string()).collect())
-                    }).collect();
+                    let discovered_peers_map = discovered_peers
+                        .iter()
+                        .map(|(peer_id, addrs)| {
+                            (
+                                peer_id.to_string(),
+                                addrs.iter().map(|addr| addr.to_string()).collect(),
+                            )
+                        })
+                        .collect();
 
                     emit_event(
                         &event_tx,
@@ -143,7 +163,6 @@ pub async fn run_network_loop(
                 }
             },
 
-            // React to discovery and message events emitted by libp2p.
             event = swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
                     let addr_str = address.to_string();
@@ -152,14 +171,14 @@ pub async fn run_network_loop(
                     }
                 }
 
-                SwarmEvent::ExpiredListenAddr { .. } => {
-                    // Leave this empty to prevent UI spam when interfaces flap
-                }
+                SwarmEvent::ExpiredListenAddr { .. } => {}
 
                 SwarmEvent::Behaviour(BoredBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, addr) in list {
                         let is_loopback = addr.iter().any(|p| matches!(p, Protocol::Ip4(ip) if ip.is_loopback()));
-                        if is_loopback { continue; }
+                        if is_loopback {
+                            continue;
+                        }
 
                         swarm.add_peer_address(peer_id, addr.clone());
                         let addresses = discovered_peers.entry(peer_id).or_default();
@@ -169,7 +188,6 @@ pub async fn run_network_loop(
                         }
                         addresses.insert(addr);
 
-                        // Retry the dial on every mDNS pulse if the connection was dropped or blocked
                         if !connected_peers.contains(&peer_id) {
                             let _ = swarm.dial(peer_id);
                         }
@@ -196,7 +214,6 @@ pub async fn run_network_loop(
 
                 SwarmEvent::ConnectionClosed { peer_id, .. } => {
                     if connected_peers.remove(&peer_id) {
-                        // Instantly purge the peer from the mDNS routing cache on disconnect
                         discovered_peers.remove(&peer_id);
                         emit_event(&event_tx, NetworkEvent::PeerDisconnected(peer_id.to_string()));
                     }
@@ -205,21 +222,61 @@ pub async fn run_network_loop(
                 SwarmEvent::Behaviour(BoredBehaviourEvent::ReqRes(request_response::Event::Message { peer, message, .. })) => {
                     match message {
                         request_response::Message::Request { request, channel, .. } => {
-                            emit_event(
-                                &event_tx,
-                                NetworkEvent::MessageReceived {
-                                    from: peer.to_string(),
-                                    text: request.text,
-                                },
-                            );
+                            let from = peer.to_string();
+                            let text = request.text.clone();
+                            let queue_was_empty = queue.pending.is_empty();
 
-                            let _ = swarm.behaviour_mut().req_res.send_response(
-                                channel,
-                                ClipboardResponse { ack: true },
-                            );
+                            match queue.push_with_source(text.clone(), Some(from.clone())) {
+                                Ok(()) => {
+                                    let queue_len = queue.pending.len();
+                                    let queue_bytes = queue.current_bytes;
+                                    emit_event(
+                                        &event_tx,
+                                        NetworkEvent::MessageReceived {
+                                            from,
+                                            text,
+                                            queue_was_empty,
+                                            queue_len,
+                                            queue_bytes,
+                                        },
+                                    );
+                                    let _ = swarm.behaviour_mut().req_res.send_response(
+                                        channel,
+                                        ClipboardResponse {
+                                            ack: true,
+                                            reason: None,
+                                        },
+                                    );
+                                }
+                                Err(QueueError::QueueFull) => {
+                                    emit_event(
+                                        &event_tx,
+                                        NetworkEvent::QueueRejected {
+                                            reason: "queue full".to_string(),
+                                        },
+                                    );
+                                    let _ = swarm.behaviour_mut().req_res.send_response(
+                                        channel,
+                                        ClipboardResponse {
+                                            ack: false,
+                                            reason: Some("queue full".to_string()),
+                                        },
+                                    );
+                                }
+                            }
                         }
-                        request_response::Message::Response { .. } => {
-                            // The peer acknowledged receipt of a message sent earlier.
+                        request_response::Message::Response { response, .. } => {
+                            if !response.ack {
+                                emit_event(
+                                    &event_tx,
+                                    NetworkEvent::DeliveryFailed {
+                                        peer: peer.to_string(),
+                                        reason: response
+                                            .reason
+                                            .unwrap_or_else(|| "delivery failed".to_string()),
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -228,8 +285,6 @@ pub async fn run_network_loop(
                     peer,
                     ..
                 })) => {
-                    // No pruning from discovered_peers here!
-                    // Issue mild warning that the buffered message failed to deliver.
                     emit_event(&event_tx, NetworkEvent::PeerUnreachable(peer.to_string()));
                 }
 

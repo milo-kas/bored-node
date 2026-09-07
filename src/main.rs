@@ -2,6 +2,30 @@ use bored_node::{NetworkEvent, Node};
 use std::error::Error;
 use tokio::io::{self, AsyncBufReadExt};
 
+fn preview_text(text: &str, max_len: usize) -> String {
+    if text.chars().count() <= max_len {
+        text.to_string()
+    } else {
+        let mut preview = text.chars().take(max_len).collect::<String>();
+        preview.push_str("...");
+        preview
+    }
+}
+
+fn print_received_block(from: Option<&str>, text: &str) {
+    println!("\n--- CLIPBOARD RECEIVED ---");
+    if let Some(from) = from {
+        println!("From: {from}");
+    }
+    println!("{text}");
+    println!("--------------------------\n");
+}
+
+fn format_queue_status(queue_len: usize, queue_bytes: usize) -> String {
+    let mb = queue_bytes as f64 / 1_000_000.0;
+    format!("queue {queue_len}/20, {:.2}MB/400MB", mb)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut node = Node::start().await?;
@@ -9,11 +33,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     println!("bored-node CLI running.");
     println!("- Type a message and press Enter to broadcast.");
-    println!("- Type '/to <peer_id> <message>' to send to a specific peer.\n");
+    println!("- Type '/to <peer_id> <message>' to send to a specific peer.");
+    println!("- Use '/queue next', '/queue star', '/queue all', and '/list star'.\n");
 
     loop {
         tokio::select! {
-            // Read a line from stdin and forward it to the network layer.
             result = stdin.next_line() => match result {
                 Ok(Some(line)) => {
                     let trimmed = line.trim();
@@ -31,6 +55,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         }
                     } else if trimmed == "/list" {
                         let _ = node.list().await;
+                    } else if trimmed == "/queue next" {
+                        let _ = node.dismiss_current().await;
+                    } else if trimmed == "/queue star" {
+                        let _ = node.star_current().await;
+                    } else if trimmed == "/queue all" {
+                        let _ = node.list_pending().await;
+                    } else if trimmed == "/list star" {
+                        let _ = node.list_starred().await;
                     } else {
                         let _ = node.broadcast_text(trimmed.to_string()).await;
                     }
@@ -45,7 +77,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
             },
 
-            // Handle asynchronous events coming back from the network loop.
             Some(event) = node.event_rx.recv() => match event {
                 NetworkEvent::ListeningOn(addr) => println!("[INFO] Listening on {addr}"),
                 NetworkEvent::PeerDiscovered(peer) => println!("[DISCOVERY] Found peer: {peer}"),
@@ -58,12 +89,56 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     println!("{text}");
                     println!("--------------------------\n");
                 }
-                NetworkEvent::MessageReceived { from, text } => {
-                    println!("\n--- CLIPBOARD RECEIVED ---");
-                    println!("Node: {from}");
-                    println!("{text}");
-                    println!("--------------------------\n");
+                NetworkEvent::MessageReceived {
+                    from,
+                    text,
+                    queue_was_empty,
+                    queue_len,
+                    queue_bytes,
+                } => {
+                    if queue_was_empty {
+                        print_received_block(Some(&from), &text);
+                    } else {
+                        println!(
+                            "[INFO] New item received from {from}. ({}) (/queue next to view)",
+                            format_queue_status(queue_len, queue_bytes)
+                        );
+                    }
                 }
+                NetworkEvent::DeliveryFailed { peer, reason } => {
+                    println!("[ERROR] Delivery failed to {peer}: {reason}");
+                }
+                NetworkEvent::QueueRejected { reason } => {
+                    println!("[ERROR] Incoming item rejected: {reason}");
+                }
+                NetworkEvent::QueueItemDismissed { item } => {
+                    print_received_block(item.from.as_deref(), &item.text);
+                }
+                NetworkEvent::QueueItemStarred { item } => {
+                    println!("[INFO] Item saved to starred list.");
+                    print_received_block(item.from.as_deref(), &item.text);
+                }
+                NetworkEvent::QueuePendingList { items } => {
+                    if items.is_empty() {
+                        println!("Queue is empty.");
+                    } else {
+                        for item in items {
+                            println!("[{}] {}", item.id, preview_text(&item.text, 80));
+                        }
+                    }
+                }
+                NetworkEvent::QueueStarredList { items } => {
+                    if items.is_empty() {
+                        println!("No starred items.");
+                    } else {
+                        for item in items {
+                            println!("--- STARRED ITEM ---");
+                            println!("{}", item.text);
+                            println!("--------------------");
+                        }
+                    }
+                }
+                NetworkEvent::QueueEmpty => println!("Queue is empty."),
                 NetworkEvent::List { listen_addresses, discovered_peers, connected_peers } => {
                     println!("\n---LIST CURRENT NODE STATUS---");
                     println!("Listening on:");
@@ -74,7 +149,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     for (peer, addrs) in discovered_peers {
                         println!("> {peer}:");
                         for addr in addrs {
-                            println!(">> {addr}");
+                            println!(">>{addr}");
                         }
                     }
                     println!("\nConnected peers:");
