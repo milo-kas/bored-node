@@ -54,6 +54,12 @@ pub enum NetworkEvent {
     QueueStarredList {
         items: Vec<ClipboardItem>,
     },
+    QueueItemUnstarred {
+        item: ClipboardItem,
+    },
+    QueueUnstarFailed {
+        id: u128,
+    },
     QueueEmpty,
     NetworkError {
         peer: String,
@@ -78,5 +84,8 @@ pub enum NetworkCommand {
     StarCurrent,
     ListPending,
     ListStarred,
+    Unstar {
+        id: u128,
+    },
     List,
 }

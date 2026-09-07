@@ -112,6 +112,11 @@ impl ClipboardQueue {
     pub fn list_starred(&self) -> impl Iterator<Item = &ClipboardItem> {
         self.starred.iter()
     }
+
+    pub fn unstar(&mut self, id: u128) -> Option<ClipboardItem> {
+        let index = self.starred.iter().position(|item| item.id == id)?;
+        Some(self.starred.remove(index))
+    }
 }
 
 #[cfg(test)]

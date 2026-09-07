@@ -73,6 +73,13 @@ impl Node {
             .map_err(|e| e.into())
     }
 
+    pub async fn unstar(&self, id: u128) -> Result<(), Box<dyn Error>> {
+        self.command_tx
+            .send(NetworkCommand::Unstar { id })
+            .await
+            .map_err(|e| e.into())
+    }
+
     pub async fn list(&self) -> Result<(), Box<dyn Error>> {
         self.command_tx
             .send(NetworkCommand::List)

@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("bored-node CLI running.");
     println!("- Type a message and press Enter to broadcast.");
     println!("- Type '/to <peer_id> <message>' to send to a specific peer.");
-    println!("- Use '/queue next', '/queue star', '/queue all', and '/list star'.\n");
+    println!("- Use '/queue next', '/queue star', '/queue all', '/list star', and '/unstar <id>'.\n");
 
     loop {
         tokio::select! {
@@ -63,6 +63,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         let _ = node.list_pending().await;
                     } else if trimmed == "/list star" {
                         let _ = node.list_starred().await;
+                    } else if let Some(id_str) = trimmed.strip_prefix("/unstar ") {
+                        match id_str.trim().parse::<u128>() {
+                            Ok(id) => {
+                                let _ = node.unstar(id).await;
+                            }
+                            Err(_) => {
+                                println!("Usage: /unstar <id>");
+                            }
+                        }
                     } else {
                         let _ = node.broadcast_text(trimmed.to_string()).await;
                     }
@@ -141,11 +150,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         println!("No starred items.");
                     } else {
                         for item in items {
-                            println!("--- STARRED ITEM ---");
+                            println!("--- STARRED ITEM [{}] ---", item.id);
                             println!("{}", item.text);
                             println!("--------------------");
                         }
                     }
+                }
+                NetworkEvent::QueueItemUnstarred { item } => {
+                    println!("[INFO] Unstarred [{}]: {}", item.id, preview_text(&item.text, 40));
+                }
+                NetworkEvent::QueueUnstarFailed { id } => {
+                    println!("[ERROR] No starred item found with id {id}.");
                 }
                 NetworkEvent::QueueEmpty => println!("Queue is empty."),
                 NetworkEvent::List { listen_addresses, discovered_peers, connected_peers } => {

@@ -148,6 +148,13 @@ pub async fn run_network_loop(
                     let items = queue.list_starred().cloned().collect();
                     emit_event(&event_tx, NetworkEvent::QueueStarredList { items });
                 }
+                NetworkCommand::Unstar { id } => {
+                    if let Some(item) = queue.unstar(id) {
+                        emit_event(&event_tx, NetworkEvent::QueueItemUnstarred { item });
+                    } else {
+                        emit_event(&event_tx, NetworkEvent::QueueUnstarFailed { id });
+                    }
+                }
                 NetworkCommand::List => {
                     let listen_addresses_list = listen_addresses.iter().cloned().collect();
                     let connected_peers_list = connected_peers.iter().map(|p| p.to_string()).collect();
