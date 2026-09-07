@@ -46,4 +46,12 @@ impl Node {
             .await
             .map_err(|e| e.into())
     }
+
+    /// List all discovered and connected peers, and listening addresses
+    pub async fn list(&self) -> Result<(), Box<dyn Error>> {
+        self.command_tx
+            .send(NetworkCommand::List)
+            .await
+            .map_err(|e| e.into())
+    }
 }

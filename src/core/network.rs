@@ -122,6 +122,25 @@ pub async fn run_network_loop(
                         );
                     }
                 }
+                NetworkCommand::List => {
+                    // Emit a snapshot of the current network state
+                    let listen_addresses_list = listen_addresses.iter().cloned().collect();
+                    let connected_peers_list = connected_peers.iter().map(|p| p.to_string()).collect();
+
+                    // Hashmap (peerID and associated addresses)
+                    let discovered_peers_map = discovered_peers.iter().map(|(peer_id, addrs)| {
+                        (peer_id.to_string(), addrs.iter().map(|addr| addr.to_string()).collect())
+                    }).collect();
+
+                    emit_event(
+                        &event_tx,
+                        NetworkEvent::List {
+                            listen_addresses: listen_addresses_list,
+                            discovered_peers: discovered_peers_map,
+                            connected_peers: connected_peers_list,
+                        },
+                    );
+                }
             },
 
             // React to discovery and message events emitted by libp2p.

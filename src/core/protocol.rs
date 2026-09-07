@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // Wire formats for libp2p Request/Response
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +24,11 @@ pub enum NetworkEvent {
     MessageSent { text: String },
     MessageReceived { from: String, text: String },
     NetworkError { peer: String, error: String },
+    List {
+        listen_addresses: Vec<String>,
+        discovered_peers: HashMap<String, Vec<String>>,
+        connected_peers: Vec<String>,
+    }
 }
 
 // Commands sent FROM the frontend to the network
@@ -33,4 +39,5 @@ pub enum NetworkCommand {
         target_peer_id: String,
         text: String,
     },
+    List,
 }

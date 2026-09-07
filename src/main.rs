@@ -29,6 +29,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         } else {
                             println!("Usage: /to <peer_id> <message>");
                         }
+                    } else if trimmed == "/list" {
+                        let _ = node.list().await;
                     } else {
                         let _ = node.broadcast_text(trimmed.to_string()).await;
                     }
@@ -60,6 +62,25 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     println!("\n--- CLIPBOARD RECEIVED ---");
                     println!("Node: {from}");
                     println!("{text}");
+                    println!("--------------------------\n");
+                }
+                NetworkEvent::List { listen_addresses, discovered_peers, connected_peers } => {
+                    println!("\n---LIST CURRENT NODE STATUS---");
+                    println!("Listening on:");
+                    for addr in listen_addresses {
+                        println!("> {addr}");
+                    }
+                    println!("\nDiscovered peers:");
+                    for (peer, addrs) in discovered_peers {
+                        println!("> {peer}:");
+                        for addr in addrs {
+                            println!(">> {addr}");
+                        }
+                    }
+                    println!("\nConnected peers:");
+                    for peer in connected_peers {
+                        println!("> {peer}");
+                    }
                     println!("--------------------------\n");
                 }
                 NetworkEvent::NetworkError { peer, error } => {
