@@ -383,10 +383,18 @@ fn forward_db_response<T, E, F>(
     tokio::spawn(async move {
         let _ = match resp_rx.await {
             Ok(Ok(val)) => event_tx.send(map_success(val)).await,
-            Ok(Err(err)) => event_tx.send(NetworkEvent::DatabaseError(err.to_string())).await,
-            Err(_) => event_tx.send(
-                NetworkEvent::DatabaseError("DB thread dropped request".into())
-            ).await
+            Ok(Err(err)) => {
+                event_tx
+                    .send(NetworkEvent::DatabaseError(err.to_string()))
+                    .await
+            }
+            Err(_) => {
+                event_tx
+                    .send(NetworkEvent::DatabaseError(
+                        "DB thread dropped request".into(),
+                    ))
+                    .await
+            }
         };
     });
 }

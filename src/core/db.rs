@@ -1,5 +1,5 @@
 use crate::core::{protocol::StarredMetadata, queue::ClipboardItem};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use tokio::sync::{mpsc, oneshot};
 
@@ -129,7 +129,11 @@ pub fn spawn_db_actor(db_path: PathBuf) -> mpsc::Sender<DbCommand> {
                 DbCommand::Delete { id, responder } => {
                     let _ = responder.send(db.delete(id));
                 }
-                DbCommand::GetPreviewPage { limit, offset, responder } => {
+                DbCommand::GetPreviewPage {
+                    limit,
+                    offset,
+                    responder,
+                } => {
                     let _ = responder.send(db.get_preview_page(limit, offset));
                 }
                 DbCommand::GetFullText { id, responder } => {

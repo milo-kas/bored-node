@@ -66,7 +66,10 @@ pub enum NetworkEvent {
         items: Vec<StarredMetadata>,
         offset: usize,
     },
-    StarredTextLoaded { id: u128, text: String },
+    StarredTextLoaded {
+        id: u128,
+        text: String,
+    },
     DatabaseError(String),
     QueueEmpty,
     NetworkError {
@@ -92,7 +95,10 @@ pub enum NetworkCommand {
     StarCurrent,
     ListPending,
     Unstar(u128),
-    LoadStarredPage { limit: usize, offset: usize },
+    LoadStarredPage {
+        limit: usize,
+        offset: usize,
+    },
     GetFullStarredText(u128),
     List,
 }

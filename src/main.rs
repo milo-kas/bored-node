@@ -34,7 +34,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("bored-node CLI running.");
     println!("- Type a message and press Enter to broadcast.");
     println!("- Type '/to <peer_id> <message>' to send to a specific peer.");
-    println!("- Use '/queue next', '/queue star', '/queue all', '/list star', and '/unstar <id>'.\n");
+    println!(
+        "- Use '/queue next', '/queue star', '/queue all', '/list star', and '/unstar <id>'.\n"
+    );
 
     loop {
         tokio::select! {

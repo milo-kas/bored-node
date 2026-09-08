@@ -13,7 +13,9 @@ pub struct Node {
 }
 
 impl Node {
-    pub async fn start(custom_db_path: Option<PathBuf>) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub async fn start(
+        custom_db_path: Option<PathBuf>,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, event_rx) = mpsc::channel(64);
         let db_path = match custom_db_path {
@@ -21,7 +23,8 @@ impl Node {
             None => {
                 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
                 {
-                    let base_dir = dirs::data_local_dir().expect("Failed to resolve local data directory");
+                    let base_dir =
+                        dirs::data_local_dir().expect("Failed to resolve local data directory");
                     let app_dir = base_dir.join("bored-node");
                     std::fs::create_dir_all(&app_dir)?;
                     app_dir.join("starred.db")
@@ -100,7 +103,11 @@ impl Node {
             .map_err(|e| e.into())
     }
 
-    pub async fn load_starred_page(&self, limit: usize, offset: usize) -> Result<(), Box<dyn Error>> {
+    pub async fn load_starred_page(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(), Box<dyn Error>> {
         self.command_tx
             .send(NetworkCommand::LoadStarredPage { limit, offset })
             .await
