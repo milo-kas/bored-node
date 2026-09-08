@@ -1,6 +1,28 @@
 use crate::core::{protocol::StarredMetadata, queue::ClipboardItem};
 use rusqlite::{params, Connection};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tokio::sync::{mpsc, oneshot};
+
+/// Messages sent to the dedicated database thread.
+pub enum DbCommand {
+    Insert {
+        item: ClipboardItem,
+        responder: oneshot::Sender<Result<(), String>>,
+    },
+    Delete {
+        id: u128,
+        responder: oneshot::Sender<Result<(), rusqlite::Error>>,
+    },
+    GetPreviewPage {
+        limit: usize,
+        offset: usize,
+        responder: oneshot::Sender<Result<Vec<StarredMetadata>, rusqlite::Error>>,
+    },
+    GetFullText {
+        id: u128,
+        responder: oneshot::Sender<Result<String, rusqlite::Error>>,
+    },
+}
 
 pub struct Database {
     conn: Connection,
@@ -9,9 +31,7 @@ pub struct Database {
 impl Database {
     pub fn init(path: &Path) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(path)?;
-
         conn.execute_batch("PRAGMA auto_vacuum = FULL;")?;
-
         conn.execute(
             "CREATE TABLE IF NOT EXISTS starred (
                 id TEXT PRIMARY KEY,
@@ -54,10 +74,8 @@ impl Database {
     }
 
     pub fn delete(&self, id: u128) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "DELETE FROM starred WHERE id = ?1",
-            params![id.to_string()],
-        )?;
+        self.conn
+            .execute("DELETE FROM starred WHERE id = ?1", params![id.to_string()])?;
         Ok(())
     }
 
@@ -96,4 +114,29 @@ impl Database {
             |row| row.get(0),
         )
     }
+}
+
+/// Spawns a dedicated OS thread owning the database connection.
+pub fn spawn_db_actor(db_path: PathBuf) -> mpsc::Sender<DbCommand> {
+    let (db_tx, mut db_rx) = mpsc::channel::<DbCommand>(64);
+    std::thread::spawn(move || {
+        let db = Database::init(&db_path).expect("Failed to init DB");
+        while let Some(command) = db_rx.blocking_recv() {
+            match command {
+                DbCommand::Insert { item, responder } => {
+                    let _ = responder.send(db.insert(&item));
+                }
+                DbCommand::Delete { id, responder } => {
+                    let _ = responder.send(db.delete(id));
+                }
+                DbCommand::GetPreviewPage { limit, offset, responder } => {
+                    let _ = responder.send(db.get_preview_page(limit, offset));
+                }
+                DbCommand::GetFullText { id, responder } => {
+                    let _ = responder.send(db.get_full_text(id));
+                }
+            }
+        }
+    });
+    db_tx
 }

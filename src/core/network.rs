@@ -1,5 +1,5 @@
 use super::{
-    db,
+    db::DbCommand,
     protocol::{ClipboardRequest, ClipboardResponse, NetworkCommand, NetworkEvent},
     queue::{ClipboardQueue, QueueError},
 };
@@ -14,11 +14,12 @@ use libp2p::{
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
+    fmt::Display,
     path::PathBuf,
     str::FromStr,
     time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(NetworkBehaviour)]
 pub struct BoredBehaviour {
@@ -28,7 +29,9 @@ pub struct BoredBehaviour {
 }
 
 fn emit_event(event_tx: &mpsc::Sender<NetworkEvent>, event: NetworkEvent) {
-    let _ = event_tx.try_send(event);
+    if let Err(mpsc::error::TrySendError::Full(_)) = event_tx.try_send(event) {
+        eprintln!("[WARNING] Event channel buffer full (64). UI is lagging; event dropped.");
+    }
 }
 
 pub async fn run_network_loop(
@@ -36,7 +39,8 @@ pub async fn run_network_loop(
     event_tx: mpsc::Sender<NetworkEvent>,
     db_path: PathBuf,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let db = db::Database::init(&db_path).expect("Failed to init DB");
+    let db_tx = super::db::spawn_db_actor(db_path);
+
     let local_key = identity::Keypair::generate_ed25519();
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
@@ -125,25 +129,44 @@ pub async fn run_network_loop(
                     if let Some(dismissed) = queue.next() {
                         let next = queue.peek_current().cloned();
                         emit_event(&event_tx, NetworkEvent::QueueItemDismissed {
-                                dismissed,
-                                next
-                            });
+                            dismissed,
+                            next,
+                        });
                     } else {
                         emit_event(&event_tx, NetworkEvent::QueueEmpty);
                     }
                 }
-                // Star current item and dismiss it from the queue.
                 NetworkCommand::StarCurrent => {
-                    if let Some(starred) = queue.star_current() {
-                        match db.insert(&starred) {
-                            Ok(()) => {
+                    if let Some(item_to_star) = queue.peek_current().cloned() {
+                        let (resp_tx, resp_rx) = oneshot::channel();
+
+                        let send_result = db_tx.send(DbCommand::Insert {
+                            item: item_to_star,
+                            responder: resp_tx,
+                        }).await;
+
+                        if send_result.is_err() {
+                            emit_event(
+                                &event_tx,
+                                NetworkEvent::DatabaseError("Failed to send insert command to DB".to_string()),
+                            );
+                            continue;
+                        }
+
+                        match resp_rx.await {
+                            Ok(Ok(())) => {
+                                let starred = queue.star_current().unwrap();
                                 let next = queue.peek_current().cloned();
-                                emit_event(&event_tx, NetworkEvent::QueueItemStarred {
-                                    starred,
-                                    next,
-                                });
+                                emit_event(
+                                    &event_tx,
+                                    NetworkEvent::QueueItemStarred { starred, next }
+                                );
                             }
-                            Err(err) => emit_event(&event_tx, NetworkEvent::DatabaseError(err)),
+                            Ok(Err(err)) => emit_event(&event_tx, NetworkEvent::DatabaseError(err)),
+                            Err(_) => emit_event(
+                                &event_tx,
+                                NetworkEvent::DatabaseError("DB thread dropped request".to_string())
+                            ),
                         }
                     } else {
                         emit_event(&event_tx, NetworkEvent::QueueEmpty);
@@ -153,23 +176,29 @@ pub async fn run_network_loop(
                     let items = queue.list_all().cloned().collect();
                     emit_event(&event_tx, NetworkEvent::QueuePendingList { items });
                 }
-                NetworkCommand::Unstar(id) => {
-                    match db.delete(id) {
-                        Ok(()) => emit_event(&event_tx, NetworkEvent::QueueItemUnstarred { id }),
-                        Err(err) => emit_event(&event_tx, NetworkEvent::DatabaseError(err.to_string())),
-                    }
-                }
                 NetworkCommand::LoadStarredPage { limit, offset } => {
-                    match db.get_preview_page(limit, offset) {
-                        Ok(items) => emit_event(&event_tx, NetworkEvent::StarredPageLoaded { items, offset }),
-                        Err(err) => emit_event(&event_tx, NetworkEvent::DatabaseError(err.to_string())),
-                    }
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let _ = db_tx.send(DbCommand::GetPreviewPage { limit, offset, responder: resp_tx }).await;
+
+                    forward_db_response(resp_rx, event_tx.clone(), move |items| {
+                        NetworkEvent::StarredPageLoaded { items, offset }
+                    });
+                }
+                NetworkCommand::Unstar(id) => {
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let _ = db_tx.send(DbCommand::Delete { id, responder: resp_tx }).await;
+
+                    forward_db_response(resp_rx, event_tx.clone(), move |_| {
+                        NetworkEvent::QueueItemUnstarred { id }
+                    });
                 }
                 NetworkCommand::GetFullStarredText(id) => {
-                    match db.get_full_text(id) {
-                        Ok(text) => emit_event(&event_tx, NetworkEvent::StarredTextLoaded { id, text }),
-                        Err(err) => emit_event(&event_tx, NetworkEvent::DatabaseError(err.to_string())),
-                    }
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let _ = db_tx.send(DbCommand::GetFullText { id, responder: resp_tx }).await;
+
+                    forward_db_response(resp_rx, event_tx.clone(), move |text| {
+                        NetworkEvent::StarredTextLoaded { id, text }
+                    });
                 }
                 NetworkCommand::List => {
                     let listen_addresses_list = listen_addresses.iter().cloned().collect();
@@ -340,4 +369,24 @@ pub async fn run_network_loop(
             }
         }
     }
+}
+
+fn forward_db_response<T, E, F>(
+    resp_rx: oneshot::Receiver<Result<T, E>>,
+    event_tx: mpsc::Sender<NetworkEvent>,
+    map_success: F,
+) where
+    T: Send + 'static,
+    E: Display + Send + 'static,
+    F: FnOnce(T) -> NetworkEvent + Send + 'static,
+{
+    tokio::spawn(async move {
+        let _ = match resp_rx.await {
+            Ok(Ok(val)) => event_tx.send(map_success(val)).await,
+            Ok(Err(err)) => event_tx.send(NetworkEvent::DatabaseError(err.to_string())).await,
+            Err(_) => event_tx.send(
+                NetworkEvent::DatabaseError("DB thread dropped request".into())
+            ).await
+        };
+    });
 }
