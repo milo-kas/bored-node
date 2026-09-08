@@ -86,7 +86,7 @@ pub async fn run_network_loop(
                 NetworkCommand::BroadcastText(text) => {
                     let req = ClipboardRequest { text: text.clone() };
 
-                    if discovered_peers.is_empty() {
+                    if connected_peers.is_empty() {
                         emit_event(
                             &event_tx,
                             NetworkEvent::NetworkError {
@@ -97,14 +97,14 @@ pub async fn run_network_loop(
                     } else {
                         emit_event(&event_tx, NetworkEvent::MessageSent { text: text.clone() });
 
-                        for peer in discovered_peers.keys() {
+                        for peer in &connected_peers {
                             swarm.behaviour_mut().req_res.send_request(peer, req.clone());
                         }
                     }
                 }
                 NetworkCommand::SendTextTo { target_peer_id, text } => {
                     if let Ok(peer) = PeerId::from_str(&target_peer_id) {
-                        if discovered_peers.contains_key(&peer) {
+                        if connected_peers.contains(&peer) {
                             let req = ClipboardRequest { text: text.clone() };
                             emit_event(&event_tx, NetworkEvent::MessageSent { text });
                             swarm.behaviour_mut().req_res.send_request(&peer, req);
@@ -113,7 +113,7 @@ pub async fn run_network_loop(
                                 &event_tx,
                                 NetworkEvent::NetworkError {
                                     peer: target_peer_id,
-                                    error: "peer not discovered on network".to_string(),
+                                    error: "peer not connected".to_string(),
                                 },
                             );
                         }
@@ -251,7 +251,6 @@ pub async fn run_network_loop(
                         }
                         addresses.insert(addr);
 
-                        // To avoid simultaneous dial races, only the node with a greater ID dials the other discovered peer
                         if !connected_peers.contains(&peer_id) && local_peer_id > peer_id {
                             let _ = swarm.dial(peer_id);
                         }
@@ -350,8 +349,6 @@ pub async fn run_network_loop(
                     peer,
                     ..
                 })) => {
-                    // Purge the dead node from the routing table
-                    discovered_peers.remove(&peer);
                     emit_event(&event_tx, NetworkEvent::PeerUnreachable(peer.to_string()));
                 }
 
