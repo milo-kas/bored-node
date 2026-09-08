@@ -1,10 +1,14 @@
 use bored_node::{NetworkEvent, Node};
-use std::error::Error;
+use dirs;
+use dirs::data_local_dir;
+use std::{error::Error, path::PathBuf};
 use tokio::io::{self, AsyncBufReadExt};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut node = Node::start(None).await?;
+    let db_path = resolve_db_path();
+
+    let mut node = Node::start(Some(db_path)).await?;
     let mut stdin = io::BufReader::new(io::stdin()).lines();
 
     println!("bored-node CLI running.");
@@ -197,4 +201,29 @@ fn print_received_block(from: Option<&str>, text: &str) {
 fn format_queue_status(queue_len: usize, queue_bytes: usize) -> String {
     let mb = queue_bytes as f64 / 1_000_000.0;
     format!("queue {queue_len}/20, {:.2}MB/400MB", mb)
+}
+
+/// Resolve the SQLite DB path using a platform fallback chain
+fn resolve_db_path() -> PathBuf {
+    let db_path = data_local_dir()
+        // Standard OS local data dir
+        .map(|dir| dir.join("bored-node").join("starred.db"))
+        // Minimal Unix
+        .or_else(|| {
+            std::env::var("HOME").ok().map(|home| {
+                PathBuf::from(home)
+                    .join(".local")
+                    .join("share")
+                    .join("bored-node")
+                    .join("starred.db")
+            })
+        })
+        // Current working dir (last resort)
+        .unwrap_or_else(|| PathBuf::from("starred.db"));
+
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    db_path
 }
