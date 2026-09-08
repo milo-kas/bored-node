@@ -71,6 +71,8 @@ pub async fn run_network_loop(
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(86400)))
         .build();
 
+    let local_peer_id = *swarm.local_peer_id();
+
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
     let mut discovered_peers: HashMap<PeerId, HashSet<libp2p::Multiaddr>> = HashMap::new();
@@ -249,7 +251,8 @@ pub async fn run_network_loop(
                         }
                         addresses.insert(addr);
 
-                        if !connected_peers.contains(&peer_id) {
+                        // To avoid simultaneous dial races, only the node with a greater ID dials the other discovered peer
+                        if !connected_peers.contains(&peer_id) && local_peer_id > peer_id {
                             let _ = swarm.dial(peer_id);
                         }
                     }
@@ -273,10 +276,11 @@ pub async fn run_network_loop(
                     }
                 }
 
-                SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                    if connected_peers.remove(&peer_id) {
-                        discovered_peers.remove(&peer_id);
-                        emit_event(&event_tx, NetworkEvent::PeerDisconnected(peer_id.to_string()));
+                SwarmEvent::ConnectionClosed { peer_id, num_established, .. } => {
+                    if num_established == 0 {
+                        if connected_peers.remove(&peer_id) {
+                            emit_event(&event_tx, NetworkEvent::PeerDisconnected(peer_id.to_string()));
+                        }
                     }
                 }
 
@@ -346,6 +350,8 @@ pub async fn run_network_loop(
                     peer,
                     ..
                 })) => {
+                    // Purge the dead node from the routing table
+                    discovered_peers.remove(&peer);
                     emit_event(&event_tx, NetworkEvent::PeerUnreachable(peer.to_string()));
                 }
 
