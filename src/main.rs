@@ -2,30 +2,6 @@ use bored_node::{NetworkEvent, Node};
 use std::error::Error;
 use tokio::io::{self, AsyncBufReadExt};
 
-fn preview_text(text: &str, max_len: usize) -> String {
-    if text.chars().count() <= max_len {
-        text.to_string()
-    } else {
-        let mut preview = text.chars().take(max_len).collect::<String>();
-        preview.push_str("...");
-        preview
-    }
-}
-
-fn print_received_block(from: Option<&str>, text: &str) {
-    println!("\n--- CLIPBOARD RECEIVED ---");
-    if let Some(from) = from {
-        println!("From: {from}");
-    }
-    println!("{text}");
-    println!("--------------------------\n");
-}
-
-fn format_queue_status(queue_len: usize, queue_bytes: usize) -> String {
-    let mb = queue_bytes as f64 / 1_000_000.0;
-    format!("queue {queue_len}/20, {:.2}MB/400MB", mb)
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut node = Node::start(None).await?;
@@ -197,4 +173,28 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     Ok(())
+}
+
+fn preview_text(text: &str, max_len: usize) -> String {
+    if text.chars().count() <= max_len {
+        text.to_string()
+    } else {
+        let mut preview = text.chars().take(max_len).collect::<String>();
+        preview.push_str("...");
+        preview
+    }
+}
+
+fn print_received_block(from: Option<&str>, text: &str) {
+    println!("\n--- CLIPBOARD RECEIVED ---");
+    if let Some(from) = from {
+        println!("From: {from}");
+    }
+    println!("{text}");
+    println!("--------------------------\n");
+}
+
+fn format_queue_status(queue_len: usize, queue_bytes: usize) -> String {
+    let mb = queue_bytes as f64 / 1_000_000.0;
+    format!("queue {queue_len}/20, {:.2}MB/400MB", mb)
 }
