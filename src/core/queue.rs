@@ -106,7 +106,6 @@ impl ClipboardQueue {
     pub fn list_all(&self) -> impl Iterator<Item = &ClipboardItem> {
         self.pending.iter()
     }
-
 }
 
 #[cfg(test)]
@@ -122,7 +121,10 @@ mod tests {
         }
 
         assert_eq!(queue.pending.len(), MAX_QUEUE_ITEMS);
-        assert_eq!(queue.push("overflow".to_string()), Err(QueueError::QueueFull));
+        assert_eq!(
+            queue.push("overflow".to_string()),
+            Err(QueueError::QueueFull)
+        );
         assert_eq!(queue.pending.len(), MAX_QUEUE_ITEMS);
     }
 
@@ -182,4 +184,20 @@ mod tests {
         assert!(queue.pending.is_empty());
         assert_eq!(queue.current_bytes, 0);
     }
+}
+
+#[test]
+fn test_peek_does_not_remove() {
+    let mut queue = ClipboardQueue::default();
+    queue.push("Safe Item".to_string()).unwrap();
+
+    // Peeking should leave the item in the queue
+    let peeked = queue.peek_current().cloned();
+    assert!(peeked.is_some());
+    assert_eq!(queue.pending.len(), 1);
+
+    // Starring should remove it
+    let starred = queue.star_current();
+    assert!(starred.is_some());
+    assert_eq!(queue.pending.len(), 0);
 }
