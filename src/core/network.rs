@@ -12,13 +12,14 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     error::Error,
     fmt::Display,
     path::PathBuf,
     str::FromStr,
     time::Duration,
 };
+use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(NetworkBehaviour)]
@@ -75,18 +76,16 @@ pub async fn run_network_loop(
 
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-    let mut discovered_peers: HashMap<PeerId, HashSet<libp2p::Multiaddr>> = HashMap::new();
-    let mut connected_peers: HashSet<PeerId> = HashSet::new();
     let mut listen_addresses: HashSet<String> = HashSet::new();
+    let mut discovered_peers: HashMap<PeerId, HashSet<libp2p::Multiaddr>> = HashMap::new();
+
     let mut queue = ClipboardQueue::default();
 
     loop {
         tokio::select! {
             Some(cmd) = command_rx.recv() => match cmd {
                 NetworkCommand::BroadcastText(text) => {
-                    let req = ClipboardRequest { text: text.clone() };
-
-                    if connected_peers.is_empty() {
+                    if discovered_peers.is_empty() {
                         emit_event(
                             &event_tx,
                             NetworkEvent::NetworkError {
@@ -96,27 +95,18 @@ pub async fn run_network_loop(
                         );
                     } else {
                         emit_event(&event_tx, NetworkEvent::MessageSent { text: text.clone() });
+                        let req = ClipboardRequest { text: text.clone() };
 
-                        for peer in &connected_peers {
-                            swarm.behaviour_mut().req_res.send_request(peer, req.clone());
+                        for peer_id in discovered_peers.keys() {
+                            swarm.behaviour_mut().req_res.send_request(&peer_id, req.clone());
                         }
                     }
                 }
                 NetworkCommand::SendTextTo { target_peer_id, text } => {
                     if let Ok(peer) = PeerId::from_str(&target_peer_id) {
-                        if connected_peers.contains(&peer) {
-                            let req = ClipboardRequest { text: text.clone() };
-                            emit_event(&event_tx, NetworkEvent::MessageSent { text });
-                            swarm.behaviour_mut().req_res.send_request(&peer, req);
-                        } else {
-                            emit_event(
-                                &event_tx,
-                                NetworkEvent::NetworkError {
-                                    peer: target_peer_id,
-                                    error: "peer not connected".to_string(),
-                                },
-                            );
-                        }
+                        let req = ClipboardRequest { text: text.clone() };
+                        emit_event(&event_tx, NetworkEvent::MessageSent { text });
+                        swarm.behaviour_mut().req_res.send_request(&peer, req);
                     } else {
                         emit_event(
                             &event_tx,
@@ -204,13 +194,16 @@ pub async fn run_network_loop(
                 }
                 NetworkCommand::List => {
                     let listen_addresses_list = listen_addresses.iter().cloned().collect();
-                    let connected_peers_list = connected_peers.iter().map(|p| p.to_string()).collect();
+                    let connected_peers_list = swarm
+                        .connected_peers()
+                        .map(|peer| peer.to_string())
+                        .collect();
                     let discovered_peers_map = discovered_peers
                         .iter()
                         .map(|(peer_id, addrs)| {
                             (
                                 peer_id.to_string(),
-                                addrs.iter().map(|addr| addr.to_string()).collect(),
+                                addrs.iter().map(|a| a.to_string()).collect()
                             )
                         })
                         .collect();
@@ -238,30 +231,24 @@ pub async fn run_network_loop(
 
                 SwarmEvent::Behaviour(BoredBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, addr) in list {
-                        let is_loopback = addr.iter().any(|p| matches!(p, Protocol::Ip4(ip) if ip.is_loopback()));
-                        if is_loopback {
-                            continue;
-                        }
-
                         swarm.add_peer_address(peer_id, addr.clone());
-                        let addresses = discovered_peers.entry(peer_id).or_default();
 
-                        if addresses.is_empty() {
+                        let addrs = discovered_peers.entry(peer_id).or_default();
+
+                        if addrs.is_empty() {
                             emit_event(&event_tx, NetworkEvent::PeerDiscovered(peer_id.to_string()));
                         }
-                        addresses.insert(addr);
 
-                        if !connected_peers.contains(&peer_id) && local_peer_id > peer_id {
-                            let _ = swarm.dial(peer_id);
-                        }
+                        addrs.insert(addr);
                     }
                 }
 
                 SwarmEvent::Behaviour(BoredBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
                     for (peer_id, addr) in list {
-                        if let Some(addresses) = discovered_peers.get_mut(&peer_id) {
-                            addresses.remove(&addr);
-                            if addresses.is_empty() {
+                        if let Some(addrs) = discovered_peers.get_mut(&peer_id) {
+                            addrs.remove(&addr);
+
+                            if addrs.is_empty() {
                                 discovered_peers.remove(&peer_id);
                                 emit_event(&event_tx, NetworkEvent::PeerExpired(peer_id.to_string()));
                             }
@@ -270,14 +257,14 @@ pub async fn run_network_loop(
                 }
 
                 SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                    if connected_peers.insert(peer_id) {
+                    if swarm.is_connected(&peer_id) {
                         emit_event(&event_tx, NetworkEvent::PeerConnected(peer_id.to_string()));
                     }
                 }
 
                 SwarmEvent::ConnectionClosed { peer_id, num_established, .. } => {
                     if num_established == 0 {
-                        if connected_peers.remove(&peer_id) {
+                        if !swarm.is_connected(&peer_id) {
                             emit_event(&event_tx, NetworkEvent::PeerDisconnected(peer_id.to_string()));
                         }
                     }
