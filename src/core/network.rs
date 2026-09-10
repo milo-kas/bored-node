@@ -6,7 +6,6 @@ use super::{
 use futures::StreamExt;
 use libp2p::{
     PeerId, StreamProtocol, identity, mdns,
-    multiaddr::Protocol,
     ping,
     request_response::{self, ProtocolSupport},
     swarm::{NetworkBehaviour, SwarmEvent},
@@ -71,8 +70,6 @@ pub async fn run_network_loop(
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(86400)))
         .build();
-
-    let local_peer_id = *swarm.local_peer_id();
 
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
