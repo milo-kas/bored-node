@@ -5,21 +5,14 @@ use super::{
 };
 use futures::StreamExt;
 use libp2p::{
-    PeerId, StreamProtocol, identity, mdns,
-    multiaddr::Protocol,
-    ping,
+    PeerId, StreamProtocol, identity, mdns, ping,
     request_response::{self, ProtocolSupport},
     swarm::{NetworkBehaviour, SwarmEvent},
 };
-use std::{
-    collections::HashSet,
-    error::Error,
-    fmt::Display,
-    path::PathBuf,
-    str::FromStr,
-    time::Duration,
-};
 use std::collections::HashMap;
+use std::{
+    collections::HashSet, error::Error, fmt::Display, path::PathBuf, str::FromStr, time::Duration,
+};
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(NetworkBehaviour)]
@@ -71,8 +64,6 @@ pub async fn run_network_loop(
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(86400)))
         .build();
-
-    let local_peer_id = *swarm.local_peer_id();
 
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
